@@ -436,14 +436,45 @@
           this.photos = [];
           this.calendar = null;
           this.currentPhotoIndex = 0;
-          this.initializeEventListeners();
-          this.loadPhotos();
-          // DOMContentLoadedイベント後にカレンダーを初期化
-          if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => this.initializeCalendar());
-          } else {
-            this.initializeCalendar();
-          }
+          this.dbName = 'KomorebiDB';
+          this.storeName = 'photos';
+          this.db = null;
+          
+          this.initializeDB().then(() => {
+            this.initializeEventListeners();
+            this.loadPhotos();
+            // DOMContentLoadedイベント後にカレンダーを初期化
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', () => this.initializeCalendar());
+            } else {
+              this.initializeCalendar();
+            }
+          });
+        }
+
+        async initializeDB() {
+          return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, 1);
+            
+            request.onerror = () => {
+              console.error('IndexedDB error:', request.error);
+              reject(request.error);
+            };
+            
+            request.onsuccess = (event) => {
+              this.db = event.target.result;
+              console.log('IndexedDB initialized');
+              resolve();
+            };
+            
+            request.onupgradeneeded = (event) => {
+              const db = event.target.result;
+              if (!db.objectStoreNames.contains(this.storeName)) {
+                const objectStore = db.createObjectStore(this.storeName, { keyPath: 'id' });
+                objectStore.createIndex('date', 'date', { unique: false });
+              }
+            };
+          });
         }
 
         initializeEventListeners() {
@@ -734,8 +765,31 @@
           }
         }
 
-        savePhotos() {
+        async savePhotos() {
           console.log('写真を保存しました:', this.photos.length, '枚');
+          
+          // IndexedDBに保存
+          if (this.db) {
+            const transaction = this.db.transaction([this.storeName], 'readwrite');
+            const objectStore = transaction.objectStore(this.storeName);
+            
+            // 既存のデータをクリア
+            objectStore.clear();
+            
+            // 新しいデータを保存
+            this.photos.forEach(photo => {
+              objectStore.add(photo);
+            });
+            
+            transaction.oncomplete = () => {
+              console.log('データがIndexedDBに保存されました');
+            };
+            
+            transaction.onerror = () => {
+              console.error('保存エラー:', transaction.error);
+            };
+          }
+          
           // カレンダーのイベントを更新
           if (this.calendar) {
             // デバッグ用ログ
@@ -745,9 +799,37 @@
           }
         }
 
-        loadPhotos() {
-          // 初期化時は空の配列
+        async loadPhotos() {
           console.log('写真を読み込み中...');
+          
+          if (!this.db) {
+            console.error('Database not initialized');
+            return;
+          }
+          
+          return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction([this.storeName], 'readonly');
+            const objectStore = transaction.objectStore(this.storeName);
+            const request = objectStore.getAll();
+            
+            request.onsuccess = () => {
+              this.photos = request.result || [];
+              this.sortPhotosByDate();
+              console.log('読み込まれた写真:', this.photos.length, '枚');
+              
+              // カレンダーを更新
+              if (this.calendar) {
+                this.calendar.refetchEvents();
+              }
+              
+              resolve();
+            };
+            
+            request.onerror = () => {
+              console.error('読み込みエラー:', request.error);
+              reject(request.error);
+            };
+          });
         }
       }
 
